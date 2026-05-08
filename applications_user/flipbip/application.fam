@@ -1,0 +1,17 @@
+App(
+    appid="flipbip",
+    name="FlipBIP (T-Embed Plus)",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="flipbip_app",
+    requires=[
+        "gui",
+    ],
+    stack_size=8 * 1024,
+    order=10,
+    fap_icon="flipbip_10px.png",
+    fap_category="Tools",
+    fap_author="Struan Clark (xtruan); ESP32 port: AmsaOne",
+    fap_weburl="https://github.com/AmsaOne/Flipper-Zero-ESP32-Port",
+    fap_version=(1, 18),
+    fap_description="BIP39/BIP44 crypto wallet, ported for LilyGO T-Embed Plus on Sor3nt's Flipper-Zero-ESP32-Port. Sideload via SD card.",
+)

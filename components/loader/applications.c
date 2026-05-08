@@ -41,5 +41,15 @@ const FlipperInternalApplication FLIPPER_ARCHIVE = FLIPPER_ARCHIVE_DEF;
 const FlipperExternalApplication FLIPPER_EXTSETTINGS_APPS[] = {};
 const size_t FLIPPER_EXTSETTINGS_APPS_COUNT = COUNT_OF(FLIPPER_EXTSETTINGS_APPS);
 
-const FlipperExternalApplication FLIPPER_EXTERNAL_APPS[] = {};
+const FlipperExternalApplication FLIPPER_EXTERNAL_APPS[] = {
+    /* FlipBIP — sideloaded BIP39/BIP44 crypto wallet, ported for T-Embed Plus.
+     * The menu entry is built into the firmware; the .fap binary lives on the
+     * SD card at the path below. The loader detects the .fap extension and
+     * routes through flipper_application_preload + map_to_memory. */
+    {
+        .name = "FlipBIP (T-Embed Plus)",
+        .icon = &A_Plugins_14,
+        .path = "/ext/apps/Tools/flipbip.fap",
+    },
+};
 const size_t FLIPPER_EXTERNAL_APPS_COUNT = COUNT_OF(FLIPPER_EXTERNAL_APPS);
