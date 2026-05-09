@@ -23,6 +23,11 @@ typedef struct {
      * on BOARD_HAS_RGB_LED) and per future feature additions. */
     VariableItem* night_shift_start_item;
     VariableItem* night_shift_end_item;
+    /* Direct refs for the UI Background/Foreground items so each callback
+     * can auto-shift the *other* slider when the user picks a color that
+     * would collide (BG == FG = invisible UI = soft-brick risk). */
+    VariableItem* ui_bg_color_item;
+    VariableItem* ui_fg_color_item;
 } NotificationAppSettings;
 
 static const NotificationSequence sequence_note_c = {
@@ -314,14 +319,39 @@ static void led_speed_changed(VariableItem* item) {
  * "UI Background" (fg_color = field around UI elements, default Orange) and
  * "UI Foreground" (bg_color = drawn UI elements, default Black). */
 #define UI_COLOR_COUNT 11
+#define UI_COLOR_BLACK_INDEX     0
+#define UI_COLOR_WHITE_INDEX     8
+#define UI_COLOR_SPECTRUM_INDEX  10
 const char* const ui_color_text[UI_COLOR_COUNT] = {
     "Black", "Orange", "Red", "Green", "Blue", "Cyan",
     "Magenta", "Yellow", "White", "Purple", "Spectrum",
 };
 
+/* Pick a high-contrast partner so BG/FG are never identical-static.
+ * Spectrum + anything is allowed because Spectrum is hue-offset 180° from
+ * the other channel, so the two never collide visually. */
+static uint8_t ui_color_pick_contrast(uint8_t conflicting_idx) {
+    return (conflicting_idx == UI_COLOR_BLACK_INDEX) ? UI_COLOR_WHITE_INDEX : UI_COLOR_BLACK_INDEX;
+}
+
 static void ui_bg_color_changed(VariableItem* item) {
     NotificationAppSettings* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
+
+    /* Soft-brick guard: BG must not equal FG with two static colors —
+     * the entire UI would render as a solid field and become invisible.
+     * If the user just collided with FG, auto-shift FG to a contrasting
+     * partner so readability is preserved. */
+    uint8_t fg = app->notification->settings.ui_fg_color_index;
+    if(index == fg && index != UI_COLOR_SPECTRUM_INDEX) {
+        uint8_t new_fg = ui_color_pick_contrast(index);
+        app->notification->settings.ui_fg_color_index = new_fg;
+        if(app->ui_fg_color_item) {
+            variable_item_set_current_value_index(app->ui_fg_color_item, new_fg);
+            variable_item_set_current_value_text(app->ui_fg_color_item, ui_color_text[new_fg]);
+        }
+    }
+
     variable_item_set_current_value_text(item, ui_color_text[index]);
     app->notification->settings.ui_color_index = index;
     notification_apply_ui_color(app->notification);     /* live preview */
@@ -331,6 +361,19 @@ static void ui_bg_color_changed(VariableItem* item) {
 static void ui_fg_color_changed(VariableItem* item) {
     NotificationAppSettings* app = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
+
+    /* Same soft-brick guard as ui_bg_color_changed — auto-shift BG if
+     * the user picked a static FG that would collide with a static BG. */
+    uint8_t bg = app->notification->settings.ui_color_index;
+    if(index == bg && index != UI_COLOR_SPECTRUM_INDEX) {
+        uint8_t new_bg = ui_color_pick_contrast(index);
+        app->notification->settings.ui_color_index = new_bg;
+        if(app->ui_bg_color_item) {
+            variable_item_set_current_value_index(app->ui_bg_color_item, new_bg);
+            variable_item_set_current_value_text(app->ui_bg_color_item, ui_color_text[new_bg]);
+        }
+    }
+
     variable_item_set_current_value_text(item, ui_color_text[index]);
     app->notification->settings.ui_fg_color_index = index;
     notification_apply_ui_color(app->notification);     /* live preview */
@@ -347,6 +390,8 @@ static NotificationAppSettings* alloc_settings(void) {
     NotificationAppSettings* app = malloc(sizeof(NotificationAppSettings));
     app->night_shift_start_item = NULL;
     app->night_shift_end_item = NULL;
+    app->ui_bg_color_item = NULL;
+    app->ui_fg_color_item = NULL;
     app->notification = furi_record_open(RECORD_NOTIFICATION);
 
     app->variable_item_list = variable_item_list_alloc();
@@ -372,6 +417,7 @@ static NotificationAppSettings* alloc_settings(void) {
                       ? app->notification->settings.ui_color_index : 1;
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, ui_color_text[value_index]);
+    app->ui_bg_color_item = item;
 
     /* UI Foreground tint — fills the drawn UI elements themselves: text,
      * icons, borders (default Black). When both UI colors are Spectrum, the
@@ -382,6 +428,7 @@ static NotificationAppSettings* alloc_settings(void) {
                       ? app->notification->settings.ui_fg_color_index : 0;
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, ui_color_text[value_index]);
+    app->ui_fg_color_item = item;
 
     /* WS2812 ring controls — only added when the board actually has a ring
      * (furi_hal_light_pixel_count() > 0). Boards without a ring (Waveshare

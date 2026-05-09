@@ -96,6 +96,11 @@ def cmd_build(args):
     # FLIPPER_BOARD must also be in the env: fam_config.py reads it via
     # os.environ to filter board-incompatible apps (e.g. NFC/IR on Waveshare C6).
     extra = {"FLIPPER_BOARD": flipper_board}
+    # Auto-purge stale sdkconfig if the cached target doesn't match this build
+    # (e.g. after a cross-build run left it at esp32c6 and the user now wants
+    # to build T-Embed). Without this idf.py errors with 'sdkconfig was
+    # generated for X but CMakeCache contains Y'. cross-build does the same.
+    _purge_stale_sdkconfig(target, build_dir)
     rc = run_with_idf_env(esp_idf_dir, f"{common} set-target {target}", extra)
     if rc != 0:
         return rc
@@ -103,8 +108,11 @@ def cmd_build(args):
 
 
 def cmd_flash(args):
-    flipper_board, _, build_dir = BOARDS[args.board]
+    flipper_board, target, build_dir = BOARDS[args.board]
     port = get_port(args.port)
+    # Same purge as cmd_build - flash without rebuild also reads sdkconfig
+    # so a target mismatch trips the same error.
+    _purge_stale_sdkconfig(target, build_dir)
     return run_with_idf_env(
         get_esp_idf_dir(),
         f"-B {build_dir} -DFLIPPER_BOARD={flipper_board} -p {port} flash",
