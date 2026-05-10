@@ -1,0 +1,10 @@
+App(
+    appid="spectrogram",
+    name="RF Spectrogram",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="spectrogram_app",
+    stack_size=4 * 1024,
+    icon="A_Sub1ghz_14",
+    order=80,
+    fap_libs=["assets"],
+)

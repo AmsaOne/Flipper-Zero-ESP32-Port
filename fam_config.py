@@ -36,6 +36,7 @@ APPS = [
     "example_number_input",
     "clock",
     "bad_usb",
+    "spectrogram",
     "subghz",
     "cli_subghz",
     "subghz_load_dangerous_settings",
