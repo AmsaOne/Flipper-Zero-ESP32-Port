@@ -16,3 +16,9 @@ _flash_helper.py
 # Managed components are pulled by IDF component manager from idf_component.yml
 # + dependencies.lock; the source-of-truth is those two files.
 managed_components/
+
+# api_diff.py generated tier classification artifacts (regenerated on demand)
+tools/tier1.txt
+tools/tier2.txt
+tools/tier3.txt
+tools/libc.txt
