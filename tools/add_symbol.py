@@ -163,7 +163,7 @@ def main():
         print("  WARNING: Table sort order is broken!", file=sys.stderr)
         return 1
 
-    print(f"  ✓ Table correctly sorted ({len(verify_entries)} entries)")
+    print(f"  [ok] Table correctly sorted ({len(verify_entries)} entries)")
     return 0
 
 
