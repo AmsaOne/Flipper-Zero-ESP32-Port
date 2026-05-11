@@ -10,23 +10,25 @@
 
 #define TAG "Spectrogram"
 
-#define SPECTROGRAM_DWELL_US      50U     /* µs to wait after set_rx before reading RSSI */
-#define SPECTROGRAM_BAR_DECAY     0.85f   /* multiplied per sweep when signal drops */
-#define SPECTROGRAM_ANTENNA_MS    10U     /* RF path settling after a band change */
-#define SPECTROGRAM_BAR_STRIPE_H  16U     /* rows per draw_bitmap in bar chart (9 calls vs 130) */
+/* 30 us explicit dwell; SPI overhead between set_rx and get_rssi adds ~30 us
+ * more for ~60 us total, safely above the 35 us RSSI settle at 115 kBaud. */
+#define SPECTROGRAM_DWELL_US      30U
+#define SPECTROGRAM_BAR_DECAY     0.85f
+#define SPECTROGRAM_ANTENNA_MS    10U
+#define SPECTROGRAM_BAR_STRIPE_H  16U
 
 #define SPECTROGRAM_MAX_REDRAW_INTERVAL_MS  1000U
 #define SPECTROGRAM_LIVE_REDRAW_INTERVAL_MS  200U
 
-/* Spectrum-scan preset optimised for speed:
- *   MDMCFG4 = 0x7C  →  CHANBW_E=1, CHANBW_M=3  →  232 kHz BW
- *                       DRATE_E = 12
- *   MDMCFG3 = 0x22  →  DRATE_M = 34  →  ~115 kBaud
- *   T_SYM ≈ 8.7 µs, RSSI settle ≈ (2*ceil(256/464)+2)*8.7 = 35 µs
- *   MCSM0   = 0x08  →  FS_AUTOCAL disabled (no per-pixel calibration stall)
- * 232 kHz BW matches Bruce's waterfall config and gives ~5.5 dB better noise
- * floor vs the 812 kHz BW previously used for speed (ceil term is identical so
- * RSSI settle time is unchanged — no speed penalty for the narrower filter). */
+/* CC1101 spectrum-scan preset.
+ * MDMCFG4=0x7C: CHANBW_E=1, CHANBW_M=3 => 232 kHz BW; DRATE_E=12
+ * MDMCFG3=0x22: DRATE_M=34 => ~115 kBaud; T_SYM~=8.7 us
+ * RSSI settle = (2*ceil(256/464)+2)*8.7 ~= 35 us
+ * MCSM0=0x08:   FS_AUTOCAL=00 (no per-pixel calibration stall)
+ * AGCCTRL0=0x40: low hysteresis (01), 8-sample wait (00), 8-sample RSSI filter
+ *                fastest AGC response for 30 us dwell
+ * 232 kHz BW matches Bruce waterfall and gives ~5.5 dB better noise floor
+ * vs the 812 kHz setting, with no speed penalty (same ceil term, same settle). */
 static const uint8_t spectrogram_preset_regs[] = {
     0x02, 0x0D,   /* IOCFG0:   GD0 async serial */
     0x03, 0x07,   /* FIFOTHR:  ADC retention */
@@ -35,11 +37,11 @@ static const uint8_t spectrogram_preset_regs[] = {
     0x14, 0x00,   /* MDMCFG0 */
     0x13, 0x00,   /* MDMCFG1 */
     0x12, 0x30,   /* MDMCFG2:  OOK, no preamble/sync */
-    0x11, 0x22,   /* MDMCFG3:  DRATE_M=34  (~115 kBaud) */
+    0x11, 0x22,   /* MDMCFG3:  DRATE_M=34 (~115 kBaud) */
     0x10, 0x7C,   /* MDMCFG4:  BW=232 kHz (E=1,M=3), DRATE_E=12 */
     0x18, 0x08,   /* MCSM0:    FS_AUTOCAL=00, PO_TIMEOUT=10 */
     0x19, 0x18,   /* FOCCFG */
-    0x1D, 0x91,   /* AGCCTRL0: medium hysteresis, 16-sample AGC */
+    0x1D, 0x40,   /* AGCCTRL0: low hyst, 8-samp wait, no freeze, 8-samp filter */
     0x1C, 0x00,   /* AGCCTRL1 */
     0x1B, 0x07,   /* AGCCTRL2: max LNA gain, MAIN_TARGET 42 dB */
     0x20, 0xFB,   /* WORCTRL */
@@ -72,15 +74,12 @@ static void spectrogram_clear_band(SpectrogramApp* app, uint16_t* line) {
     furi_hal_spi_bus_unlock();
 }
 
-/* Draw the bar chart using a multi-row stripe buffer so we push
- * ceil(bar_h / STRIPE_H) draw_bitmap calls instead of bar_h calls.
- * At bar_h=130 and STRIPE_H=16 that is 9 calls vs 130 — ~10x faster.
- *
- * Bars grow from the bottom; color follows the RSSI ramp (blue baseline
- * → red/yellow at peaks) matching the waterfall color scheme. */
+/* Bar chart: 9 draw_bitmap calls instead of 130 via 16-row stripe buffer.
+ * Bars grow from the bottom. Color follows RSSI ramp: blue at baseline,
+ * yellow/red at peaks -- same gradient as the waterfall. */
 static void spectrogram_draw_bars(
     SpectrogramApp* app,
-    uint16_t* stripe,   /* DMA buffer: W * SPECTROGRAM_BAR_STRIPE_H pixels */
+    uint16_t* stripe,
     const float* bars) {
     const uint16_t W     = app->panel_w;
     const uint16_t bar_h = app->band_bottom - app->band_top;
@@ -137,10 +136,7 @@ static int32_t spectrogram_worker_thread(void* context) {
         return -1;
     }
 
-    /* Persistent bar levels for bar-chart mode — zero-init, kept across sweeps */
     float* bars = calloc(W, sizeof(float));
-
-    /* Stripe buffer for fast bar rendering: STRIPE_H rows in one draw_bitmap */
     uint16_t* bar_stripe = heap_caps_malloc(
         (size_t)W * SPECTROGRAM_BAR_STRIPE_H * sizeof(uint16_t), MALLOC_CAP_DMA);
 
@@ -151,7 +147,7 @@ static int32_t spectrogram_worker_thread(void* context) {
     uint32_t row_max_freq = 0;
     uint32_t last_max_publish_ms = 0;
     uint32_t last_live_publish_ms = 0;
-    uint32_t last_band_center = 0; /* detect RF path changes for antenna settling */
+    uint32_t last_band_center = 0;
 
     while(w->running) {
         uint32_t f_start, f_end;
@@ -179,10 +175,6 @@ static int32_t spectrogram_worker_thread(void* context) {
         if(do_clear) {
             spectrogram_clear_band(app, line);
             if(bars) memset(bars, 0, (size_t)W * sizeof(float));
-
-            /* Move to the band centre and wait for the RF path switch to settle.
-             * furi_hal_subghz_set_frequency_and_path switches the CC1101 antenna
-             * relay; Bruce measured a 10 ms settling requirement on T-Embed. */
             uint32_t center = f_start + (f_end - f_start) / 2;
             if(center != last_band_center) {
                 subghz_devices_idle(device);
@@ -218,7 +210,6 @@ static int32_t spectrogram_worker_thread(void* context) {
                 row_max_freq = hz;
             }
 
-            /* Update bar level: peak-hold with exponential decay */
             if(bars) {
                 float level = (rssi - SPECTROGRAM_RSSI_MIN) /
                     (SPECTROGRAM_RSSI_MAX - SPECTROGRAM_RSSI_MIN);
@@ -229,7 +220,6 @@ static int32_t spectrogram_worker_thread(void* context) {
             }
         }
 
-        /* Render the completed sweep row */
         if(display_mode == SpectrogramDisplayWaterfall) {
             furi_hal_spi_bus_lock();
             esp_lcd_panel_draw_bitmap(app->panel, 0, y, W, y + 1, line);
@@ -237,14 +227,10 @@ static int32_t spectrogram_worker_thread(void* context) {
             y++;
             if(y >= app->band_bottom) y = app->band_top;
         } else if(bars) {
-            (void)y; /* bars mode uses full area, y not needed */
-            /* Use the stripe buffer when available; fall back to single-row
-             * rendering with the scan line buffer if DMA alloc failed. */
             uint16_t* draw_buf = bar_stripe ? bar_stripe : line;
             spectrogram_draw_bars(app, draw_buf, bars);
         }
 
-        /* Yield once per row so input handling and other tasks stay responsive */
         furi_thread_yield();
 
         uint32_t now_ms = furi_get_tick();

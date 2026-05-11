@@ -7,7 +7,7 @@
 
 #define SPECTROGRAM_HEADER_H  18
 #define SPECTROGRAM_FOOTER_H  22
-#define SPECTROGRAM_RSSI_MIN  (-100.0f)
+#define SPECTROGRAM_RSSI_MIN  (-115.0f)  /* CC1101 usable floor ~-115 dBm at 232 kHz BW */
 #define SPECTROGRAM_RSSI_MAX  (-20.0f)
 
 typedef enum {
