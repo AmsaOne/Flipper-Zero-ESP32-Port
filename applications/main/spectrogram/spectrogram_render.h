@@ -53,3 +53,6 @@ void spectrogram_draw_header(SpectrogramApp* app, uint16_t* line_buf);
 
 /* Compose and push the bottom footer band (max RSSI / range / hints) */
 void spectrogram_draw_footer(SpectrogramApp* app, uint16_t* line_buf);
+
+/* Returns the human-readable band name for a given band mode */
+const char* spectrogram_band_name(SpectrogramBandMode m);

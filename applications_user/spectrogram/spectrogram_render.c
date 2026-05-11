@@ -6,11 +6,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static int clampi(int v, int lo, int hi) {
-    if(v < lo) return lo;
-    if(v > hi) return hi;
-    return v;
-}
 
 uint16_t spectrogram_color_for_rssi(float rssi) {
     /* Map [-100, -30] dBm → [0, 255] level (Bruce inverts so strong = high level) */
@@ -22,7 +17,8 @@ uint16_t spectrogram_color_for_rssi(float rssi) {
 
     uint8_t r = 0, g = 0, b = 0;
     if(level <= 63) {
-        b = (uint8_t)(64 + (level * (255 - 64)) / 63);
+        /* Noise floor starts at a mid blue so a dead band is still visible */
+        b = (uint8_t)(128 + (level * (255 - 128)) / 63);
     } else if(level <= 127) {
         int k = level - 64;
         g = (uint8_t)((k * 255) / 63);
@@ -144,69 +140,109 @@ void spectrogram_draw_header(SpectrogramApp* app, uint16_t* line_buf) {
 void spectrogram_draw_footer(SpectrogramApp* app, uint16_t* line_buf) {
     const uint16_t W = app->panel_w;
     const uint16_t H = SPECTROGRAM_FOOTER_H;
-    const uint16_t BG = spectrogram_rgb565(0, 0, 0);
-    const uint16_t FG = spectrogram_rgb565(255, 255, 255);
-    const uint16_t MAX_FG = spectrogram_rgb565(255, 255, 0);
-    const uint16_t HIGHLIGHT = spectrogram_rgb565(255, 165, 0);
+    const uint16_t BG        = spectrogram_rgb565(0,   0,   0);
+    const uint16_t FG        = spectrogram_rgb565(255, 255, 255);
+    const uint16_t YELLOW    = spectrogram_rgb565(255, 255, 0);
+    const uint16_t ORANGE    = spectrogram_rgb565(255, 165, 0);
+    const uint16_t CYAN      = spectrogram_rgb565(0,   220, 220);
+    const uint16_t ERR_COLOR = spectrogram_rgb565(255, 64,  64);
 
     spectrogram_fill_rect(line_buf, W, 0, 0, W, H, BG);
 
     SpectrogramField sel;
-    uint32_t f_start, f_end, f_max;
-    float r_max;
+    SpectrogramStatus status;
+    SpectrogramBandMode band_mode;
+    SpectrogramDisplayMode display_mode;
+    uint32_t f_start, f_end, f_max, f_now;
+    float r_max, r_now;
+    uint32_t scans;
     furi_mutex_acquire(app->mutex, FuriWaitForever);
-    sel = app->selected;
+    sel          = app->selected;
+    status       = app->status;
+    band_mode    = app->band_mode;
+    display_mode = app->display_mode;
     f_start = app->f_start_hz;
-    f_end = app->f_end_hz;
-    f_max = app->max_freq_hz;
-    r_max = app->max_rssi;
+    f_end   = app->f_end_hz;
+    f_max   = app->max_freq_hz;
+    r_max   = app->max_rssi;
+    f_now   = app->last_freq_hz;
+    r_now   = app->last_rssi;
+    scans   = app->scans_done;
     furi_mutex_release(app->mutex);
 
-    /* Top row: max RSSI / freq @ panel_w */
-    char line1[48];
-    if(f_max != 0) {
-        char fbuf[16];
-        format_freq_mhz(fbuf, sizeof(fbuf), f_max);
-        snprintf(line1, sizeof(line1), "Max %d dBm @ %s MHz", (int)r_max, fbuf);
+    /* Row 1: status line */
+    char line1[64];
+    uint16_t status_color = YELLOW;
+    if(status == SpectrogramStatusRunning) {
+        char fbuf[16], mbuf[16];
+        format_freq_mhz(fbuf, sizeof(fbuf), f_now);
+        if(f_max != 0) {
+            format_freq_mhz(mbuf, sizeof(mbuf), f_max);
+            snprintf(line1, sizeof(line1),
+                "Now %d @ %s  Max %d @ %s  #%lu",
+                (int)r_now, fbuf, (int)r_max, mbuf, (unsigned long)scans);
+        } else {
+            snprintf(line1, sizeof(line1),
+                "Now %d dBm @ %s  scans=%lu",
+                (int)r_now, fbuf, (unsigned long)scans);
+        }
+    } else if(status == SpectrogramStatusStarting) {
+        snprintf(line1, sizeof(line1), "Starting CC1101...");
+    } else if(status == SpectrogramStatusErrDevice) {
+        snprintf(line1, sizeof(line1), "ERROR: cc1101_int not found");
+        status_color = ERR_COLOR;
+    } else if(status == SpectrogramStatusErrBegin) {
+        snprintf(line1, sizeof(line1), "ERROR: CC1101 begin failed");
+        status_color = ERR_COLOR;
+    } else if(status == SpectrogramStatusErrAlloc) {
+        snprintf(line1, sizeof(line1), "ERROR: DMA alloc failed");
+        status_color = ERR_COLOR;
     } else {
-        snprintf(line1, sizeof(line1), "Max --- dBm @ --- MHz");
+        snprintf(line1, sizeof(line1), "Stopped");
     }
-    spectrogram_draw_str(line_buf, W, W, H, 2, 1, line1, MAX_FG, BG);
+    spectrogram_draw_str(line_buf, W, W, H, 2, 1, line1, status_color, BG);
 
-    /* Bottom row: range + selected hint */
-    char line2[48];
-    char sbuf[16], ebuf[16];
-    format_freq_mhz(sbuf, sizeof(sbuf), f_start);
-    format_freq_mhz(ebuf, sizeof(ebuf), f_end);
-    snprintf(line2, sizeof(line2), "%s - %s MHz   ", sbuf, ebuf);
-
+    /* Row 2: mode-aware controls */
     int row_y = 1 + SPECTROGRAM_FONT_H + 2;
     int x = 2;
-    spectrogram_draw_str(line_buf, W, W, H, x, row_y, line2, FG, BG);
-    x += (int)strlen(line2) * SPECTROGRAM_FONT_W;
 
-    /* Selected-field indicator */
-    const char* hint;
-    switch(sel) {
-    case SpectrogramFieldStart: hint = "[START]"; break;
-    case SpectrogramFieldEnd: hint = "[END]"; break;
-    default: hint = "[EXIT]"; break;
-    }
-    spectrogram_draw_str(line_buf, W, W, H, x, row_y, hint, HIGHLIGHT, BG);
-    x += (int)strlen(hint) * SPECTROGRAM_FONT_W + 4;
+    if(band_mode == SpectrogramBandCustom) {
+        /* Custom mode: show frequency range + selected field */
+        char sbuf[16], ebuf[16];
+        format_freq_mhz(sbuf, sizeof(sbuf), f_start);
+        format_freq_mhz(ebuf, sizeof(ebuf), f_end);
+        char range[36];
+        snprintf(range, sizeof(range), "%s-%s ", sbuf, ebuf);
+        spectrogram_draw_str(line_buf, W, W, H, x, row_y, range, FG, BG);
+        x += (int)strlen(range) * SPECTROGRAM_FONT_W;
 
-    const char* keys = " OK:cycle  Rot:adj  Back:exit";
-    int keys_w = (int)strlen(keys) * SPECTROGRAM_FONT_W;
-    int kx = W - keys_w - 1;
-    if(kx > x) {
-        spectrogram_draw_str(line_buf, W, W, H, kx, row_y, keys, FG, BG);
+        const char* sel_tag = (sel == SpectrogramFieldStart) ? "[START]" : "[END]";
+        spectrogram_draw_str(line_buf, W, W, H, x, row_y, sel_tag, ORANGE, BG);
+        x += (int)strlen(sel_tag) * SPECTROGRAM_FONT_W + 2;
+
+        const char* keys = " OK:sel Rot:freq LongOK:band";
+        int kw = (int)strlen(keys) * SPECTROGRAM_FONT_W;
+        int kx = W - kw - 1;
+        if(kx > x)
+            spectrogram_draw_str(line_buf, W, W, H, kx, row_y, keys, FG, BG);
+    } else {
+        /* Full-band or bars mode: show band name + display type */
+        const char* bname = spectrogram_band_name(band_mode);
+        const char* dtype = (display_mode == SpectrogramDisplayBars) ? "BARS" : "WFALL";
+        char mode_str[24];
+        snprintf(mode_str, sizeof(mode_str), "%s %s", bname, dtype);
+        spectrogram_draw_str(line_buf, W, W, H, x, row_y, mode_str, CYAN, BG);
+        x += (int)strlen(mode_str) * SPECTROGRAM_FONT_W + 4;
+
+        const char* keys = "OK:view LongOK:band Back:exit";
+        int kw = (int)strlen(keys) * SPECTROGRAM_FONT_W;
+        int kx = W - kw - 1;
+        if(kx > x)
+            spectrogram_draw_str(line_buf, W, W, H, kx, row_y, keys, FG, BG);
     }
 
     int y0 = app->band_bottom;
     furi_hal_spi_bus_lock();
     esp_lcd_panel_draw_bitmap(app->panel, 0, y0, W, y0 + H, line_buf);
     furi_hal_spi_bus_unlock();
-
-    /* Clamp values used for next compare in case the caller reads back */
-    (void)clampi(0, 0, 0);
 }

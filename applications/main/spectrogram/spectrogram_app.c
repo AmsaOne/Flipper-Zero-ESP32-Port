@@ -13,8 +13,26 @@
 
 #define TAG "SpectrogramApp"
 
-#define SPECTROGRAM_DEFAULT_START_HZ 433000000U
-#define SPECTROGRAM_DEFAULT_END_HZ 435000000U
+#define SPECTROGRAM_DEFAULT_START_HZ 378000000U  /* 433 full band start */
+#define SPECTROGRAM_DEFAULT_END_HZ   481000000U  /* 433 full band end   */
+
+/* Full-band boundaries matching furi_hal_subghz_is_frequency_valid ranges */
+static const uint32_t band_lo[] = { 0U,         281000000U, 378000000U, 749000000U };
+static const uint32_t band_hi[] = { 0U,         361000000U, 481000000U, 962000000U };
+static const char* const band_names[] = { "CUSTOM", "315 MHz", "433 MHz", "868 MHz" };
+
+static void spectrogram_apply_band(SpectrogramApp* app) {
+    if(app->band_mode == SpectrogramBandCustom) {
+        app->f_start_hz = app->custom_start_hz;
+        app->f_end_hz   = app->custom_end_hz;
+    } else {
+        app->f_start_hz = band_lo[app->band_mode];
+        app->f_end_hz   = band_hi[app->band_mode];
+    }
+    app->params_dirty      = true;
+    app->header_redraw_due = true;
+    app->footer_redraw_due = true;
+}
 
 static void spectrogram_input_callback(const void* value, void* ctx) {
     SpectrogramApp* app = ctx;
@@ -34,11 +52,33 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
     }
 
     if(event->key == InputKeyOk) {
-        if(event->type == InputTypeShort) {
-            app->selected = (app->selected == SpectrogramFieldStart) ? SpectrogramFieldEnd :
-                                                                       SpectrogramFieldStart;
+        if(event->type == InputTypeLong) {
+            /* Long-press OK: cycle band mode  Custom → 315 → 433 → 868 → Custom */
+            if(app->band_mode == SpectrogramBandCustom) {
+                app->custom_start_hz = app->f_start_hz;
+                app->custom_end_hz   = app->f_end_hz;
+            }
+            app->band_mode = (SpectrogramBandMode)((app->band_mode + 1) % SpectrogramBandCount);
+            spectrogram_apply_band(app);
+        } else if(event->type == InputTypeShort) {
+            if(app->band_mode == SpectrogramBandCustom) {
+                /* Custom mode: toggle which end is selected for tuning */
+                app->selected = (app->selected == SpectrogramFieldStart) ?
+                    SpectrogramFieldEnd : SpectrogramFieldStart;
+            } else {
+                /* Full-band mode: toggle waterfall / bar chart */
+                app->display_mode = (app->display_mode == SpectrogramDisplayWaterfall) ?
+                    SpectrogramDisplayBars : SpectrogramDisplayWaterfall;
+                app->params_dirty = true;
+            }
             app->footer_redraw_due = true;
         }
+        furi_mutex_release(app->mutex);
+        return;
+    }
+
+    /* Rotation only applies in custom mode */
+    if(app->band_mode != SpectrogramBandCustom) {
         furi_mutex_release(app->mutex);
         return;
     }
@@ -54,16 +94,12 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
         size_t idx = spectrogram_freq_nearest_index(*target);
         ssize_t ni = (ssize_t)idx + delta;
 
-        /* Walk the preset table in the delta direction. Prefer to stay inside
-         * the current band, but if we run off the band edge, jump to the
-         * adjacent band and snap both Start and End there. */
         bool placed = false;
         while(ni >= 0 && ni < (ssize_t)SPECTROGRAM_FREQ_PRESET_COUNT) {
             uint32_t cand = spectrogram_freq_presets_hz[ni];
             size_t cand_band = spectrogram_freq_band(cand);
 
             if(cand_band == cur_band) {
-                /* In-band: ensure ordering still holds (start < end) */
                 if(app->selected == SpectrogramFieldStart && cand >= app->f_end_hz) {
                     ni += delta;
                     continue;
@@ -77,45 +113,35 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
                 break;
             }
 
-            /* Crossed into adjacent band: snap both ends into the new band.
-             * Pick the lowest preset of the new band for start, the highest
-             * (or two steps up) for end. Walking-direction matters: if delta
-             * < 0 we landed on the highest preset of a lower band; pick that
-             * as End and find the lowest preset of the same band for Start. */
             if(delta > 0) {
-                /* Use cand as Start; find Start's band's last preset as End */
                 uint32_t new_start = cand;
                 uint32_t new_end = cand;
                 for(size_t j = ni + 1; j < SPECTROGRAM_FREQ_PRESET_COUNT; j++) {
                     if(spectrogram_freq_band(spectrogram_freq_presets_hz[j]) != cand_band) break;
                     new_end = spectrogram_freq_presets_hz[j];
                 }
-                if(new_end == new_start) {
-                    /* Only one preset in this band — keep walking */
-                    ni += delta;
-                    continue;
-                }
+                if(new_end == new_start) { ni += delta; continue; }
                 app->f_start_hz = new_start;
                 app->f_end_hz = new_end;
             } else {
-                /* delta < 0: cand is the highest preset of the lower band */
                 uint32_t new_end = cand;
                 uint32_t new_start = cand;
                 for(ssize_t j = ni - 1; j >= 0; j--) {
                     if(spectrogram_freq_band(spectrogram_freq_presets_hz[j]) != cand_band) break;
                     new_start = spectrogram_freq_presets_hz[j];
                 }
-                if(new_start == new_end) {
-                    ni += delta;
-                    continue;
-                }
+                if(new_start == new_end) { ni += delta; continue; }
                 app->f_start_hz = new_start;
                 app->f_end_hz = new_end;
             }
             placed = true;
             break;
         }
-        if(placed) app->params_dirty = true;
+        if(placed) {
+            app->custom_start_hz = app->f_start_hz;
+            app->custom_end_hz   = app->f_end_hz;
+            app->params_dirty = true;
+        }
         app->header_redraw_due = true;
         app->footer_redraw_due = true;
     }
@@ -127,29 +153,36 @@ static SpectrogramApp* spectrogram_app_alloc(void) {
     SpectrogramApp* app = malloc(sizeof(SpectrogramApp));
     memset(app, 0, sizeof(*app));
 
-    app->gui = furi_record_open(RECORD_GUI);
+    app->gui   = furi_record_open(RECORD_GUI);
     app->input = furi_record_open(RECORD_INPUT_EVENTS);
     app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
 
     app->canvas = gui_direct_draw_acquire(app->gui);
 
-    app->panel = furi_hal_display_get_panel_handle();
+    app->panel   = furi_hal_display_get_panel_handle();
     app->panel_w = furi_hal_display_get_h_res();
     app->panel_h = furi_hal_display_get_v_res();
 
-    app->band_top = SPECTROGRAM_HEADER_H;
+    app->band_top    = SPECTROGRAM_HEADER_H;
     app->band_bottom = (uint16_t)(app->panel_h - SPECTROGRAM_FOOTER_H);
 
-    app->f_start_hz = SPECTROGRAM_DEFAULT_START_HZ;
-    app->f_end_hz = SPECTROGRAM_DEFAULT_END_HZ;
-    app->selected = SpectrogramFieldStart;
-    app->max_rssi = -127.0f;
+    /* Start in full 433 MHz band waterfall — most useful default view */
+    app->band_mode    = SpectrogramBand433;
+    app->display_mode = SpectrogramDisplayWaterfall;
+    app->f_start_hz   = SPECTROGRAM_DEFAULT_START_HZ;
+    app->f_end_hz     = SPECTROGRAM_DEFAULT_END_HZ;
+    /* Custom range initialized to a useful 433 MHz preset slice */
+    app->custom_start_hz = 433075000U;
+    app->custom_end_hz   = 434177000U;
+
+    app->selected  = SpectrogramFieldStart;
+    app->max_rssi  = -127.0f;
     app->max_freq_hz = 0;
     app->header_redraw_due = true;
     app->footer_redraw_due = true;
 
     app->input_sub = furi_pubsub_subscribe(app->input, spectrogram_input_callback, app);
-    app->worker = spectrogram_worker_alloc(app);
+    app->worker    = spectrogram_worker_alloc(app);
     return app;
 }
 
@@ -179,15 +212,19 @@ static void spectrogram_clear_screen(SpectrogramApp* app) {
     heap_caps_free(black);
 }
 
+/* Expose band_names for the render layer */
+const char* spectrogram_band_name(SpectrogramBandMode m) {
+    if((size_t)m < SpectrogramBandCount) return band_names[m];
+    return "?";
+}
+
 int32_t spectrogram_app(void* p) {
     UNUSED(p);
 
     SpectrogramApp* app = spectrogram_app_alloc();
 
-    /* DMA-capable strip buffer reused for header + footer composition. Size it
-     * for the larger of the two so we only allocate once. */
-    uint16_t strip_h = (SPECTROGRAM_HEADER_H > SPECTROGRAM_FOOTER_H) ? SPECTROGRAM_HEADER_H :
-                                                                       SPECTROGRAM_FOOTER_H;
+    uint16_t strip_h = (SPECTROGRAM_HEADER_H > SPECTROGRAM_FOOTER_H) ?
+        SPECTROGRAM_HEADER_H : SPECTROGRAM_FOOTER_H;
     size_t strip_bytes = (size_t)app->panel_w * strip_h * sizeof(uint16_t);
     uint16_t* strip = heap_caps_malloc(strip_bytes, MALLOC_CAP_DMA);
 
@@ -205,14 +242,8 @@ int32_t spectrogram_app(void* p) {
         bool draw_header = false, draw_footer = false;
         furi_mutex_acquire(app->mutex, FuriWaitForever);
         stop = app->stop;
-        if(app->header_redraw_due) {
-            app->header_redraw_due = false;
-            draw_header = true;
-        }
-        if(app->footer_redraw_due) {
-            app->footer_redraw_due = false;
-            draw_footer = true;
-        }
+        if(app->header_redraw_due) { app->header_redraw_due = false; draw_header = true; }
+        if(app->footer_redraw_due) { app->footer_redraw_due = false; draw_footer = true; }
         furi_mutex_release(app->mutex);
 
         if(strip) {
