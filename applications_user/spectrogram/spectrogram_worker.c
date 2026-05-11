@@ -3,14 +3,18 @@
 
 #include <furi.h>
 #include <furi_hal_spi_bus.h>
+#include <furi_hal_spi_types.h>
+#include <furi_hal_spi.h>
 #include <esp_heap_caps.h>
+#include <cc1101.h>
+#include <cc1101_regs.h>
 #include <lib/subghz/devices/devices.h>
 #include <lib/subghz/devices/preset.h>
 
 #define TAG "Spectrogram"
 
-#define SPECTROGRAM_DWELL_MS 2U
-#define SPECTROGRAM_MAX_REDRAW_INTERVAL_MS 1000U
+#define SPECTROGRAM_DWELL_US    400U
+#define SPECTROGRAM_MAX_REDRAW_INTERVAL_MS  1000U
 #define SPECTROGRAM_LIVE_REDRAW_INTERVAL_MS 200U
 
 struct SpectrogramWorker {
@@ -24,6 +28,35 @@ static void publish_status(SpectrogramApp* app, SpectrogramStatus s) {
     app->status = s;
     app->footer_redraw_due = true;
     furi_mutex_release(app->mutex);
+}
+
+/* Calibrate the CC1101 VCO at the given centre frequency, then disable
+ * auto-calibration so subsequent IDLE→RX transitions take ~100 µs instead
+ * of ~750 µs.  Call with the device already in IDLE. */
+static void spectrogram_calibrate(const SubGhzDevice* device, uint32_t center_hz) {
+    subghz_devices_set_frequency(device, center_hz);
+    /* SCAL strobe: calibrate synthesiser from IDLE without needing
+     * FS_AUTOCAL=1.  Calibration takes ~750 µs. */
+    furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    cc1101_strobe(&furi_hal_spi_bus_handle_subghz, CC1101_STROBE_SCAL);
+    furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+    furi_delay_ms(2);
+    /* Disable auto-calibration (MCSM0 bits[5:4]=00, keep PO_TIMEOUT=10). */
+    furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
+    cc1101_write_reg(&furi_hal_spi_bus_handle_subghz, CC1101_MCSM0, 0x08);
+    furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
+}
+
+/* Fill the waterfall band with black so old data doesn't bleed through
+ * after a frequency range change. */
+static void spectrogram_clear_band(SpectrogramApp* app, uint16_t* line) {
+    const uint16_t W = app->panel_w;
+    memset(line, 0, (size_t)W * sizeof(uint16_t));
+    furi_hal_spi_bus_lock();
+    for(uint16_t cy = app->band_top; cy < app->band_bottom; cy++) {
+        esp_lcd_panel_draw_bitmap(app->panel, 0, cy, W, cy + 1, line);
+    }
+    furi_hal_spi_bus_unlock();
 }
 
 static int32_t spectrogram_worker_thread(void* context) {
@@ -46,6 +79,18 @@ static int32_t spectrogram_worker_thread(void* context) {
     subghz_devices_idle(device);
     subghz_devices_load_preset(device, FuriHalSubGhzPresetOok650Async, NULL);
 
+    /* One-time calibration at the centre of the initial sweep range.
+     * Also writes MCSM0=0x08 to disable future auto-calibration so
+     * IDLE→RX transitions no longer pay the ~750 µs calibration cost. */
+    {
+        uint32_t init_start, init_end;
+        furi_mutex_acquire(app->mutex, FuriWaitForever);
+        init_start = app->f_start_hz;
+        init_end   = app->f_end_hz;
+        furi_mutex_release(app->mutex);
+        spectrogram_calibrate(device, init_start + (init_end - init_start) / 2);
+    }
+
     const uint16_t W = app->panel_w;
     uint16_t* line = heap_caps_malloc((size_t)W * sizeof(uint16_t), MALLOC_CAP_DMA);
     if(!line) {
@@ -67,9 +112,12 @@ static int32_t spectrogram_worker_thread(void* context) {
 
     while(w->running) {
         uint32_t f_start, f_end;
+        bool do_recal = false;
+        uint32_t recal_center = 0;
+
         furi_mutex_acquire(app->mutex, FuriWaitForever);
         f_start = app->f_start_hz;
-        f_end = app->f_end_hz;
+        f_end   = app->f_end_hz;
         if(app->params_dirty) {
             app->params_dirty = false;
             row_max_rssi = -127.0f;
@@ -80,8 +128,16 @@ static int32_t spectrogram_worker_thread(void* context) {
             app->header_redraw_due = true;
             app->footer_redraw_due = true;
             y = app->band_top;
+            do_recal = true;
+            recal_center = f_start + (f_end - f_start) / 2;
         }
         furi_mutex_release(app->mutex);
+
+        if(do_recal) {
+            spectrogram_clear_band(app, line);
+            subghz_devices_idle(device);
+            spectrogram_calibrate(device, recal_center);
+        }
 
         if(f_end <= f_start) {
             furi_delay_ms(50);
@@ -96,7 +152,7 @@ static int32_t spectrogram_worker_thread(void* context) {
             subghz_devices_idle(device);
             subghz_devices_set_frequency(device, hz);
             subghz_devices_set_rx(device);
-            furi_delay_ms(SPECTROGRAM_DWELL_MS);
+            furi_delay_us(SPECTROGRAM_DWELL_US);
             float rssi = subghz_devices_get_rssi(device);
             line[col] = spectrogram_color_for_rssi(rssi);
             last_rssi_seen = rssi;
@@ -116,9 +172,6 @@ static int32_t spectrogram_worker_thread(void* context) {
 
         uint32_t now_ms = furi_get_tick();
 
-        /* Live diagnostic: publish last RSSI / current freq every 200 ms so the
-         * footer reflects what the radio is doing even if the waterfall isn't
-         * showing variation (proves the worker is alive). */
         if(now_ms - last_live_publish_ms >= SPECTROGRAM_LIVE_REDRAW_INTERVAL_MS) {
             last_live_publish_ms = now_ms;
             furi_mutex_acquire(app->mutex, FuriWaitForever);
