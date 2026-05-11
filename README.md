@@ -21,11 +21,108 @@ Join the [Flipper Zero meets ESP32 - Discord](https://discord.gg/5DnAqFXaBC) for
 
 ## RF Spectrogram -- Testers Wanted
 
-The `pr/spectrogram` branch adds a Bruce-style RF spectrum analyzer app
-(waterfall + bar chart) for the T-Embed CC1101. If you have a T-Embed and
-want to help test before it merges, see the build and flash guide:
+This branch (`pr/spectrogram`) adds a Bruce-style RF spectrum analyzer to the
+T-Embed CC1101. If you have one and want to help test before it merges, follow
+the steps below.
 
-**[TESTER_GUIDE.md](TESTER_GUIDE.md)**
+**What you're testing:** A CC1101 spectrum waterfall + bar chart app. Opens in
+the main menu as **RF Spectrogram**. Default view sweeps the full 433 MHz band.
+
+| Input | Action |
+|---|---|
+| Rotate encoder | Tune start/end frequency (custom mode only) |
+| Short press | Toggle [START]/[END] (custom) or swap waterfall/bars (band mode) |
+| Long press | Cycle band: Custom -> 315 MHz -> 433 MHz -> 868 MHz -> Custom |
+| Back button | Exit |
+
+### Clone This Branch
+
+```bash
+git clone https://github.com/AmsaOne/Flipper-Zero-ESP32-Port.git
+cd Flipper-Zero-ESP32-Port
+git checkout pr/spectrogram
+```
+
+### Install ESP-IDF v5.4.1
+
+**Exact version required. No other version will work.**
+
+**Windows** -- download the offline installer for v5.4.1 from
+https://dl.espressif.com/dl/esp-idf/?idf=5.4 and install to the default path
+`C:\Espressif\frameworks\esp-idf-v5.4.1`.
+
+**Linux / macOS:**
+
+```bash
+sudo apt install git wget flex bison gperf python3 python3-pip python3-venv \
+    cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+mkdir -p ~/esp && cd ~/esp
+git clone --recursive --branch v5.4.1 \
+    https://github.com/espressif/esp-idf.git esp-idf
+
+cd ~/esp/esp-idf
+./install.sh esp32s3
+
+source ~/esp/esp-idf/export.sh
+idf.py --version   # must print: ESP-IDF v5.4.1
+```
+
+### Build and Flash
+
+**Windows:**
+
+```cmd
+python winbuild.py build
+python winbuild.py flash --port COM14
+```
+
+Replace `COM14` with your actual port from Device Manager.
+
+**Linux / macOS:**
+
+```bash
+source ~/esp/esp-idf/export.sh
+chmod +x build.sh
+./build.sh --board t_embed
+```
+
+The build script auto-detects the serial port. To specify it:
+
+```bash
+./build.sh --board t_embed --port /dev/ttyACM0
+```
+
+### Pre-built Binary (no compile needed)
+
+Ask @AmsaOne on Discord for a pre-built `furi_esp32.bin`, then flash with:
+
+```bash
+# Linux / macOS
+esptool.py --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
+    --before default_reset --after hard_reset write_flash \
+    --flash_mode dio --flash_freq 80m --flash_size 16MB \
+    0x0 bootloader/bootloader.bin \
+    0x10000 furi_esp32.bin \
+    0x8000 partition_table/partition-table.bin
+```
+
+```cmd
+:: Windows
+esptool.py --chip esp32s3 -p COM14 -b 460800 ^
+    --before default_reset --after hard_reset write_flash ^
+    --flash_mode dio --flash_freq 80m --flash_size 16MB ^
+    0x0 bootloader\bootloader.bin ^
+    0x10000 furi_esp32.bin ^
+    0x8000 partition_table\partition-table.bin
+```
+
+### What to Report Back
+
+- Does the app launch without crashing?
+- Do waterfall and bar chart both display correctly?
+- Can you see signal spikes when a nearby 433 MHz device (key fob, sensor) transmits?
+- Any freezes, crashes, or unexpected exits?
 
 ---
 
