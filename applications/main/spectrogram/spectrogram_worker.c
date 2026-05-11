@@ -19,13 +19,14 @@
 #define SPECTROGRAM_LIVE_REDRAW_INTERVAL_MS  200U
 
 /* Spectrum-scan preset optimised for speed:
- *   MDMCFG4 = 0x0C  →  CHANBW_E=0, CHANBW_M=0  →  812.5 kHz BW (widest)
+ *   MDMCFG4 = 0x7C  →  CHANBW_E=1, CHANBW_M=3  →  232 kHz BW
  *                       DRATE_E = 12
  *   MDMCFG3 = 0x22  →  DRATE_M = 34  →  ~115 kBaud
- *   T_SYM ≈ 8.7 µs, RSSI settle ≈ (2*1+2)*8.7 ≈ 35 µs
+ *   T_SYM ≈ 8.7 µs, RSSI settle ≈ (2*ceil(256/464)+2)*8.7 = 35 µs
  *   MCSM0   = 0x08  →  FS_AUTOCAL disabled (no per-pixel calibration stall)
- * Together this lets us use a 50 µs dwell instead of 1 ms, giving ~8× faster
- * sweeps while still sampling well after RSSI has settled. */
+ * 232 kHz BW matches Bruce's waterfall config and gives ~5.5 dB better noise
+ * floor vs the 812 kHz BW previously used for speed (ceil term is identical so
+ * RSSI settle time is unchanged — no speed penalty for the narrower filter). */
 static const uint8_t spectrogram_preset_regs[] = {
     0x02, 0x0D,   /* IOCFG0:   GD0 async serial */
     0x03, 0x07,   /* FIFOTHR:  ADC retention */
@@ -35,7 +36,7 @@ static const uint8_t spectrogram_preset_regs[] = {
     0x13, 0x00,   /* MDMCFG1 */
     0x12, 0x30,   /* MDMCFG2:  OOK, no preamble/sync */
     0x11, 0x22,   /* MDMCFG3:  DRATE_M=34  (~115 kBaud) */
-    0x10, 0x0C,   /* MDMCFG4:  BW=812 kHz, DRATE_E=12 */
+    0x10, 0x7C,   /* MDMCFG4:  BW=232 kHz (E=1,M=3), DRATE_E=12 */
     0x18, 0x08,   /* MCSM0:    FS_AUTOCAL=00, PO_TIMEOUT=10 */
     0x19, 0x18,   /* FOCCFG */
     0x1D, 0x91,   /* AGCCTRL0: medium hysteresis, 16-sample AGC */

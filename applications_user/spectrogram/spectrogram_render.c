@@ -5,14 +5,19 @@
 #include <furi_hal_spi_bus.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 
 uint16_t spectrogram_color_for_rssi(float rssi) {
-    /* Map [-100, -30] dBm → [0, 255] level (Bruce inverts so strong = high level) */
+    /* Map [RSSI_MIN, RSSI_MAX] → color.  A sqrt curve is applied so that
+     * weak signals (-80 to -90 dBm) show as green/cyan rather than barely-
+     * visible blue — the linear scale compresses too much dynamic range into
+     * the dark end.  Strong signals are unaffected (sqrt(1) = 1). */
     float span = SPECTROGRAM_RSSI_MAX - SPECTROGRAM_RSSI_MIN;
     float t = (rssi - SPECTROGRAM_RSSI_MIN) / span;
     if(t < 0.f) t = 0.f;
     if(t > 1.f) t = 1.f;
+    t = sqrtf(t);  /* perceptual boost: -80 dBm at 25% linear → 50% visual */
     int level = (int)(t * 255.0f + 0.5f);
 
     uint8_t r = 0, g = 0, b = 0;
