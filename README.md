@@ -19,9 +19,19 @@ Join the [Flipper Zero meets ESP32 - Discord](https://discord.gg/5DnAqFXaBC) for
 
 ![img](pic2.jpg)
 
+## RF Spectrogram -- Testers Wanted
+
+The `pr/spectrogram` branch adds a Bruce-style RF spectrum analyzer app
+(waterfall + bar chart) for the T-Embed CC1101. If you have a T-Embed and
+want to help test before it merges, see the build and flash guide:
+
+**[TESTER_GUIDE.md](TESTER_GUIDE.md)**
+
+---
+
 ## How to Flash
 
-The easiest way is the **web flasher** — no toolchain required, just a Chrome/Edge browser and a USB cable:
+The easiest way is the **web flasher** -- no toolchain required, just a Chrome/Edge browser and a USB cable:
 
 **[Flash via Browser](https://sor3nt.github.io/interface.html)**
 
