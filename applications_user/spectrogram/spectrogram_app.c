@@ -34,11 +34,11 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
     }
 
     if(event->key == InputKeyOk) {
-        app->selected = (SpectrogramField)((app->selected + 1) % SpectrogramFieldCount);
-        if(app->selected == SpectrogramFieldExit && event->type == InputTypeLong) {
-            app->stop = true;
+        if(event->type == InputTypeShort) {
+            app->selected = (app->selected == SpectrogramFieldStart) ? SpectrogramFieldEnd :
+                                                                       SpectrogramFieldStart;
+            app->footer_redraw_due = true;
         }
-        app->footer_redraw_due = true;
         furi_mutex_release(app->mutex);
         return;
     }
@@ -47,31 +47,75 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
     if(event->key == InputKeyUp || event->key == InputKeyRight) delta = +1;
     else if(event->key == InputKeyDown || event->key == InputKeyLeft) delta = -1;
 
-    if(delta != 0 && app->selected != SpectrogramFieldExit) {
-        size_t idx;
-        if(app->selected == SpectrogramFieldStart) {
-            idx = spectrogram_freq_nearest_index(app->f_start_hz);
-            ssize_t ni = (ssize_t)idx + delta;
-            if(ni < 0) ni = 0;
-            if(ni >= (ssize_t)SPECTROGRAM_FREQ_PRESET_COUNT)
-                ni = SPECTROGRAM_FREQ_PRESET_COUNT - 1;
+    if(delta != 0) {
+        size_t cur_band = spectrogram_freq_band(app->f_start_hz);
+        uint32_t* target = (app->selected == SpectrogramFieldStart) ? &app->f_start_hz :
+                                                                       &app->f_end_hz;
+        size_t idx = spectrogram_freq_nearest_index(*target);
+        ssize_t ni = (ssize_t)idx + delta;
+
+        /* Walk the preset table in the delta direction. Prefer to stay inside
+         * the current band, but if we run off the band edge, jump to the
+         * adjacent band and snap both Start and End there. */
+        bool placed = false;
+        while(ni >= 0 && ni < (ssize_t)SPECTROGRAM_FREQ_PRESET_COUNT) {
             uint32_t cand = spectrogram_freq_presets_hz[ni];
-            if(cand < app->f_end_hz) {
-                app->f_start_hz = cand;
-                app->params_dirty = true;
+            size_t cand_band = spectrogram_freq_band(cand);
+
+            if(cand_band == cur_band) {
+                /* In-band: ensure ordering still holds (start < end) */
+                if(app->selected == SpectrogramFieldStart && cand >= app->f_end_hz) {
+                    ni += delta;
+                    continue;
+                }
+                if(app->selected == SpectrogramFieldEnd && cand <= app->f_start_hz) {
+                    ni += delta;
+                    continue;
+                }
+                *target = cand;
+                placed = true;
+                break;
             }
-        } else if(app->selected == SpectrogramFieldEnd) {
-            idx = spectrogram_freq_nearest_index(app->f_end_hz);
-            ssize_t ni = (ssize_t)idx + delta;
-            if(ni < 0) ni = 0;
-            if(ni >= (ssize_t)SPECTROGRAM_FREQ_PRESET_COUNT)
-                ni = SPECTROGRAM_FREQ_PRESET_COUNT - 1;
-            uint32_t cand = spectrogram_freq_presets_hz[ni];
-            if(cand > app->f_start_hz) {
-                app->f_end_hz = cand;
-                app->params_dirty = true;
+
+            /* Crossed into adjacent band: snap both ends into the new band.
+             * Pick the lowest preset of the new band for start, the highest
+             * (or two steps up) for end. Walking-direction matters: if delta
+             * < 0 we landed on the highest preset of a lower band; pick that
+             * as End and find the lowest preset of the same band for Start. */
+            if(delta > 0) {
+                /* Use cand as Start; find Start's band's last preset as End */
+                uint32_t new_start = cand;
+                uint32_t new_end = cand;
+                for(size_t j = ni + 1; j < SPECTROGRAM_FREQ_PRESET_COUNT; j++) {
+                    if(spectrogram_freq_band(spectrogram_freq_presets_hz[j]) != cand_band) break;
+                    new_end = spectrogram_freq_presets_hz[j];
+                }
+                if(new_end == new_start) {
+                    /* Only one preset in this band — keep walking */
+                    ni += delta;
+                    continue;
+                }
+                app->f_start_hz = new_start;
+                app->f_end_hz = new_end;
+            } else {
+                /* delta < 0: cand is the highest preset of the lower band */
+                uint32_t new_end = cand;
+                uint32_t new_start = cand;
+                for(ssize_t j = ni - 1; j >= 0; j--) {
+                    if(spectrogram_freq_band(spectrogram_freq_presets_hz[j]) != cand_band) break;
+                    new_start = spectrogram_freq_presets_hz[j];
+                }
+                if(new_start == new_end) {
+                    ni += delta;
+                    continue;
+                }
+                app->f_start_hz = new_start;
+                app->f_end_hz = new_end;
             }
+            placed = true;
+            break;
         }
+        if(placed) app->params_dirty = true;
         app->header_redraw_due = true;
         app->footer_redraw_due = true;
     }
