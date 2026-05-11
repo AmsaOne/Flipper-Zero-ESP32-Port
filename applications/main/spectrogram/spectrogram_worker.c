@@ -9,7 +9,7 @@
 
 #define TAG "Spectrogram"
 
-#define SPECTROGRAM_DWELL_US    400U
+#define SPECTROGRAM_DWELL_MS    1U
 #define SPECTROGRAM_MAX_REDRAW_INTERVAL_MS  1000U
 #define SPECTROGRAM_LIVE_REDRAW_INTERVAL_MS 200U
 
@@ -139,7 +139,7 @@ static int32_t spectrogram_worker_thread(void* context) {
             subghz_devices_idle(device);
             subghz_devices_set_frequency(device, hz);
             subghz_devices_set_rx(device);
-            furi_delay_us(SPECTROGRAM_DWELL_US);
+            furi_delay_ms(SPECTROGRAM_DWELL_MS);
             float rssi = subghz_devices_get_rssi(device);
             line[col] = spectrogram_color_for_rssi(rssi);
             last_rssi_seen = rssi;
