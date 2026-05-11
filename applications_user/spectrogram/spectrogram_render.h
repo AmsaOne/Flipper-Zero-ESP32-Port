@@ -10,7 +10,7 @@ static inline uint16_t spectrogram_rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return (uint16_t)((c >> 8) | (c << 8));
 }
 
-/* Bruce-style RSSI → RGB565 colour ramp (blue → cyan → green → yellow → red).
+/* Bruce-style RSSI to RGB565 colour ramp (blue -> cyan -> green -> yellow -> red).
  * RSSI is dBm in [SPECTROGRAM_RSSI_MIN, SPECTROGRAM_RSSI_MAX]. */
 uint16_t spectrogram_color_for_rssi(float rssi);
 

@@ -56,7 +56,7 @@ typedef struct {
 
     SpectrogramWorker* worker;
 
-    /* Shared state — guarded by mutex */
+    /* Shared state - guarded by mutex */
     uint32_t f_start_hz;
     uint32_t f_end_hz;
     SpectrogramField selected;
@@ -69,12 +69,12 @@ typedef struct {
     uint32_t custom_start_hz;
     uint32_t custom_end_hz;
 
-    /* Worker → main: max RSSI tracking */
+    /* Worker->main: max RSSI tracking */
     float max_rssi;
     uint32_t max_freq_hz;
     bool max_redraw_due;
 
-    /* Worker → main: live diagnostic */
+    /* Worker->main: live diagnostic */
     SpectrogramStatus status;
     float last_rssi;
     uint32_t last_freq_hz;

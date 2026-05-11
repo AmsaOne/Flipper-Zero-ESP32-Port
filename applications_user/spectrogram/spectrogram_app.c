@@ -53,7 +53,7 @@ static void spectrogram_input_callback(const void* value, void* ctx) {
 
     if(event->key == InputKeyOk) {
         if(event->type == InputTypeLong) {
-            /* Long-press OK: cycle band mode  Custom → 315 → 433 → 868 → Custom */
+            /* Long-press OK: cycle band mode Custom->315->433->868->Custom */
             if(app->band_mode == SpectrogramBandCustom) {
                 app->custom_start_hz = app->f_start_hz;
                 app->custom_end_hz   = app->f_end_hz;
@@ -166,7 +166,7 @@ static SpectrogramApp* spectrogram_app_alloc(void) {
     app->band_top    = SPECTROGRAM_HEADER_H;
     app->band_bottom = (uint16_t)(app->panel_h - SPECTROGRAM_FOOTER_H);
 
-    /* Start in full 433 MHz band waterfall — most useful default view */
+    /* Start in full 433 MHz band waterfall - most useful default view */
     app->band_mode    = SpectrogramBand433;
     app->display_mode = SpectrogramDisplayWaterfall;
     app->f_start_hz   = SPECTROGRAM_DEFAULT_START_HZ;

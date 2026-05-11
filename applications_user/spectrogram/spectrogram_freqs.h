@@ -12,9 +12,9 @@ typedef struct {
 } SpectrogramBand;
 
 static const SpectrogramBand spectrogram_bands[] = {
-    {281000000U, 361000000U}, /* 315 MHz band — full CC1101 path range */
-    {378000000U, 481000000U}, /* 433 MHz band — full CC1101 path range */
-    {749000000U, 962000000U}, /* 868 / 915 MHz band — full CC1101 path range */
+    {281000000U, 361000000U}, /* 315 MHz band - full CC1101 path range */
+    {378000000U, 481000000U}, /* 433 MHz band - full CC1101 path range */
+    {749000000U, 962000000U}, /* 868 / 915 MHz band - full CC1101 path range */
 };
 #define SPECTROGRAM_BAND_COUNT \
     (sizeof(spectrogram_bands) / sizeof(spectrogram_bands[0]))
